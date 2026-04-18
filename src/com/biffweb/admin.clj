@@ -200,7 +200,7 @@
 
 (defn- admin-dashboard
   [ctx]
-  (let [admin-content-url (str (:biff/base-url ctx "/") "admin/content")]
+  (let [admin-content-url (str (:biff/base-url ctx "/") "_biff/admin/content")]
     (ui/admin-page "Admin Dashboard"
       [:div
        (ui/heading "Admin Dashboard")
@@ -220,10 +220,12 @@
     (admin-dashboard-content ctx timezone)))
 
 (defn- wrap-admin-params
-  "Middleware that merges admin parameters into the request."
-  [handler params]
-  (fn [ctx]
-    (handler (merge ctx params))))
+  "Middleware that merges admin parameters into the request.
+   Used with Reitit vector syntax: [wrap-admin-params params]."
+  [params]
+  (fn [handler]
+    (fn [ctx]
+      (handler (merge ctx params)))))
 
 ;; ============================================================
 ;; Module
@@ -240,9 +242,8 @@
   [params]
   {:biff/init (fn [_modules-var]
                 {:biff.admin/pstats (atom nil)})
-   :routes ["/admin" {:middleware [(fn [handler]
-                                    (wrap-admin-params handler params))
-                                  wrap-admin-access]}
+   :routes ["/_biff/admin" {:middleware [[wrap-admin-params params]
+                                        wrap-admin-access]}
             ["" {:get admin-dashboard
                  :name ::dashboard}]
             ["/content" {:post admin-content-handler
