@@ -222,10 +222,9 @@
 (defn- wrap-admin-params
   "Middleware that merges admin parameters into the request.
    Used with Reitit vector syntax: [wrap-admin-params params]."
-  [params]
-  (fn [handler]
-    (fn [ctx]
-      (handler (merge ctx params)))))
+  [handler params]
+  (fn [ctx]
+    (handler (merge ctx params))))
 
 ;; ============================================================
 ;; Module
