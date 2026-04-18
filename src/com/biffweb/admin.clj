@@ -72,7 +72,7 @@
 (defn- date-range
   "Returns a sequence of dates from start-date to end-date (inclusive)."
   [start-date end-date]
-  (->> (iterate #(t/+ % (t/of-days 1)) start-date)
+  (->> (iterate #(t/+ % (t/new-period 1 :days)) start-date)
        (take-while #(t/<= % end-date))
        vec))
 
@@ -82,7 +82,7 @@
    Filters out events older than 30 days."
   [events tz now]
   (let [today (t/date (t/in now tz))
-        cutoff (t/- today (t/of-days 30))]
+        cutoff (t/- today (t/new-period 30 :days))]
     (->> events
          (filter #(t/<= cutoff (day-key (:instant %) tz)))
          (group-by #(day-key (:instant %) tz))
@@ -96,15 +96,15 @@
    Filters out events older than 37 days."
   [events tz now]
   (let [today (t/date (t/in now tz))
-        cutoff (t/- today (t/of-days 37))
+        cutoff (t/- today (t/new-period 37 :days))
         events (filter #(t/<= cutoff (day-key (:instant %) tz)) events)
         events-by-day (group-by #(day-key (:instant %) tz) events)
         end-date today
-        start-date (t/- today (t/of-days 29))
+        start-date (t/- today (t/new-period 29 :days))
         days (date-range start-date end-date)]
     (into (sorted-map)
           (map (fn [day]
-                 (let [window-start (t/- day (t/of-days 6))
+                 (let [window-start (t/- day (t/new-period 6 :days))
                        window-days (date-range window-start day)
                        unique-users (->> window-days
                                          (mapcat #(get events-by-day %))
@@ -119,7 +119,7 @@
    Filters out events older than 30 days."
   [events tz now]
   (let [today (t/date (t/in now tz))
-        cutoff (t/- today (t/of-days 30))]
+        cutoff (t/- today (t/new-period 30 :days))]
     (->> events
          (filter #(t/<= cutoff (day-key (:instant %) tz)))
          (group-by #(day-key (:instant %) tz))
