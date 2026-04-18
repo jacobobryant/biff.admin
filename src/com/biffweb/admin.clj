@@ -200,22 +200,23 @@
 
 (defn- admin-dashboard
   [ctx]
-  (let [admin-content-url (str (:biff/base-url ctx "/") "_biff/admin/content")]
-    (ui/admin-page "Admin"
-      [:div
-       (ui/heading "Admin")
-       [:div {:data-signals-timezone "'UTC'"
-              :data-on-load "$timezone = Intl.DateTimeFormat().resolvedOptions().timeZone"}
-        [:div {:data-on-load (str "@post('" admin-content-url "')")
-               :id "admin-content"}
-         [:p.text-gray-500 "Loading..."]]]])))
+  (ui/admin-page "Admin"
+    [:div
+     (ui/heading "Admin")
+     [:div {:id "admin-content"}
+      [:p.text-gray-500 "Loading..."]]
+     [:script
+      (str "document.addEventListener('DOMContentLoaded', function() {"
+           "  var tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';"
+           "  fetch('/_biff/admin/content?timezone=' + encodeURIComponent(tz))"
+           "    .then(function(r) { return r.text(); })"
+           "    .then(function(html) { document.getElementById('admin-content').innerHTML = html; });"
+           "});")]]))
 
 (defn- admin-content-handler
   [ctx]
   (let [timezone (or (get-in ctx [:params :timezone])
-                     (get-in ctx [:form-params "timezone"])
-                     (get-in ctx [:body-params :timezone])
-                     (get-in ctx [:body-params "timezone"])
+                     (get-in ctx [:query-params "timezone"])
                      "UTC")]
     (admin-dashboard-content ctx timezone)))
 
@@ -245,5 +246,5 @@
                                         wrap-admin-access]}
             ["" {:get admin-dashboard
                  :name ::dashboard}]
-            ["/content" {:post admin-content-handler
+            ["/content" {:get admin-content-handler
                          :name ::content}]]})

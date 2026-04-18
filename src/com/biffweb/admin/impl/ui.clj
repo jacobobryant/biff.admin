@@ -3,15 +3,13 @@
   (:require [lambdaisland.hiccup :as hiccup]
             [clojure.string :as str]))
 
-(def ^:private datastar-version "1.0.0-beta.11")
-
 (defn- render-html
   "Render hiccup to HTML string, stripping the DOCTYPE that lambdaisland/hiccup adds."
   [hiccup-form]
   (str/replace (hiccup/render hiccup-form) #"^<!DOCTYPE html>\n?" ""))
 
 (defn admin-page
-  "Render an admin page with consistent layout, including datastar."
+  "Render an admin page with consistent layout."
   [title & body]
   {:status 200
    :headers {"Content-Type" "text/html; charset=utf-8"}
@@ -26,25 +24,16 @@
                :content "width=device-width, initial-scale=1"}]
        [:title title]
        [:link {:rel "icon" :href "data:,"}]
-       [:script {:src "https://cdn.tailwindcss.com"}]
-       [:script {:type "module"
-                 :src (str "https://cdn.jsdelivr.net/npm/@starfederation/datastar@"
-                           datastar-version)}]]
+       [:script {:src "https://cdn.tailwindcss.com"}]]
       [:body.font-sans.bg-gray-50.text-gray-800.p-6.max-w-6xl.mx-auto
        body]]))})
 
 (defn admin-fragment
-  "Render an HTML fragment as a Datastar SSE response for @post/@get actions."
+  "Render an HTML fragment for the admin dashboard content."
   [hiccup]
-  (let [html (str "<div id=\"admin-content\">"
-                  (render-html hiccup)
-                  "</div>")
-        ;; SSE data lines cannot contain newlines; put all HTML on one line
-        single-line-html (str/replace html #"\n" "")]
-    {:status 200
-     :headers {"Content-Type" "text/event-stream"
-               "Cache-Control" "no-cache"}
-     :body (str "event: datastar-merge-fragments\ndata: fragments " single-line-html "\n\n")}))
+  {:status 200
+   :headers {"Content-Type" "text/html; charset=utf-8"}
+   :body (render-html hiccup)})
 
 (defn heading [text]
   [:h1.text-2xl.font-bold.mb-6 text])
