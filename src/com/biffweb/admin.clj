@@ -80,8 +80,9 @@
   "Compute Daily Active Users from user events.
    Returns a sorted map of date -> count.
    Filters out events older than 30 days."
-  [events tz]
-  (let [cutoff (t/- (t/date (t/in (t/now) tz)) (t/of-days 30))]
+  [events tz now]
+  (let [today (t/date (t/in now tz))
+        cutoff (t/- today (t/of-days 30))]
     (->> events
          (filter #(t/<= cutoff (day-key (:instant %) tz)))
          (group-by #(day-key (:instant %) tz))
@@ -93,8 +94,8 @@
   "Compute Weekly Active Users (rolling 7-day window).
    For each day in the last 30 days, count unique users from that day and previous 6 days.
    Filters out events older than 37 days."
-  [events tz]
-  (let [today (t/date (t/in (t/now) tz))
+  [events tz now]
+  (let [today (t/date (t/in now tz))
         cutoff (t/- today (t/of-days 37))
         events (filter #(t/<= cutoff (day-key (:instant %) tz)) events)
         events-by-day (group-by #(day-key (:instant %) tz) events)
@@ -116,8 +117,9 @@
 (defn- compute-daily-revenue
   "Compute daily revenue from revenue events.
    Filters out events older than 30 days."
-  [events tz]
-  (let [cutoff (t/- (t/date (t/in (t/now) tz)) (t/of-days 30))]
+  [events tz now]
+  (let [today (t/date (t/in now tz))
+        cutoff (t/- today (t/of-days 30))]
     (->> events
          (filter #(t/<= cutoff (day-key (:instant %) tz)))
          (group-by #(day-key (:instant %) tz))
@@ -129,47 +131,49 @@
 ;; Admin routes
 ;; ============================================================
 
-(defn- check-admin-access
-  "Returns a 403 response if access is denied, or nil if allowed."
-  [{:biff.admin/keys [user-id] :keys [session]}]
-  (let [current-uid (str (:uid session))
-        admin-uid (str user-id)]
-    (when (and (not (str/blank? admin-uid))
-               (or (str/blank? current-uid)
-                   (not= current-uid admin-uid)))
-      {:status 403 :headers {"content-type" "text/html"} :body "<h1>Forbidden</h1>"})))
+(defn- wrap-admin-access
+  "Middleware that checks admin access. Shows setup page if :biff.admin/user-id
+   is not set, returns 403 if UIDs don't match, otherwise calls handler."
+  [handler]
+  (fn [{:biff.admin/keys [user-id] :keys [session] :as ctx}]
+    (let [current-uid (str (:uid session))
+          admin-uid (str user-id)]
+      (cond
+        (str/blank? admin-uid)
+        (ui/admin-page "Admin Setup"
+          [:div
+           (ui/heading "Admin Setup")
+           [:p.mb-4 ":biff.admin/user-id is not set. Your current user ID is:"]
+           [:div.flex.items-center.gap-2.mb-4
+            [:code.bg-gray-100.p-2.rounded.text-sm.break-all {:id "uid-display"} current-uid]
+            [:button.bg-blue-600.text-white.px-3.py-1.rounded.text-sm.cursor-pointer
+             {:onclick (str "navigator.clipboard.writeText('" current-uid "');"
+                            "this.textContent='Copied!';"
+                            "setTimeout(()=>this.textContent='Copy',2000)")}
+             "Copy"]]
+           [:p.text-sm.text-gray-600
+            "Set :biff.admin/user-id to enable the admin dashboard."]])
 
-(defn- admin-uid-page
-  "Page shown when BIFF_ADMIN_USER_ID is not set. Shows current user's UID."
-  [{:keys [session]}]
-  (let [uid (str (:uid session))]
-    (ui/admin-page "Admin Setup"
-      [:div
-       (ui/heading "Admin Setup")
-       [:p.mb-4 "BIFF_ADMIN_USER_ID is not set. Your current user ID is:"]
-       [:div.flex.items-center.gap-2.mb-4
-        [:code.bg-gray-100.p-2.rounded.text-sm.break-all {:id "uid-display"} uid]
-        [:button.bg-blue-600.text-white.px-3.py-1.rounded.text-sm.cursor-pointer
-         {:onclick (str "navigator.clipboard.writeText('" uid "');"
-                        "this.textContent='Copied!';"
-                        "setTimeout(()=>this.textContent='Copy',2000)")}
-         "Copy"]]
-       [:p.text-sm.text-gray-600
-        "Set this value as BIFF_ADMIN_USER_ID to enable the admin dashboard."]])))
+        (or (str/blank? current-uid)
+            (not= current-uid admin-uid))
+        {:status 403 :headers {"content-type" "text/html"} :body "<h1>Forbidden</h1>"}
+
+        :else
+        (handler ctx)))))
 
 (defn- admin-dashboard-content
   [{:biff.admin/keys [pstats get-user-events get-revenue-events get-users]
     :as ctx}
    timezone]
   (let [tz (try (t/zone timezone) (catch Exception _ (t/zone "UTC")))
+        now (t/now)
         user-events (when get-user-events (get-user-events ctx))
         revenue-events (when get-revenue-events (get-revenue-events ctx))
-        dau (compute-dau (or user-events []) tz)
-        wau (compute-wau (or user-events []) tz)
-        daily-revenue (when revenue-events (compute-daily-revenue revenue-events tz))
+        dau (compute-dau (or user-events []) tz now)
+        wau (compute-wau (or user-events []) tz now)
+        daily-revenue (when revenue-events (compute-daily-revenue revenue-events tz now))
         pstats-data (when pstats @pstats)
         pstats-formatted (some-> pstats-data tufte/format-pstats)
-        today (t/date (t/in (t/now) tz))
         recent-days (->> (keys dau) (take-last 30))
         users (when get-users (get-users ctx))]
     (ui/admin-fragment
@@ -195,17 +199,14 @@
           [:p.text-gray-500 "No user data available."]))])))
 
 (defn- admin-dashboard
-  [{:biff.admin/keys [user-id] :as ctx}]
-  (if-not (not (str/blank? (str user-id)))
-    (admin-uid-page ctx)
+  [ctx]
+  (let [admin-content-url (str (:biff/base-url ctx "/") "admin/content")]
     (ui/admin-page "Admin Dashboard"
       [:div
        (ui/heading "Admin Dashboard")
        [:div {:data-signals-timezone "'UTC'"
               :data-on-load "$timezone = Intl.DateTimeFormat().resolvedOptions().timeZone"}
-        [:div {:data-on-load (str "$timezone && sse('" (:biff/base-url ctx "/") "admin/content',"
-                                  "{method: 'POST', headers: {'content-type': 'application/x-www-form-urlencoded'},"
-                                  "body: 'timezone=' + encodeURIComponent($timezone)})")
+        [:div {:data-on-load (str "@post('" admin-content-url "')")
                :id "admin-content"}
          [:p.text-gray-500 "Loading..."]]]])))
 
@@ -213,6 +214,8 @@
   [ctx]
   (let [timezone (or (get-in ctx [:params :timezone])
                      (get-in ctx [:form-params "timezone"])
+                     (get-in ctx [:body-params :timezone])
+                     (get-in ctx [:body-params "timezone"])
                      "UTC")]
     (admin-dashboard-content ctx timezone)))
 
@@ -239,11 +242,7 @@
                 {:biff.admin/pstats (atom nil)})
    :routes ["/admin" {:middleware [(fn [handler]
                                     (wrap-admin-params handler params))
-                                  (fn [handler]
-                                    (fn [ctx]
-                                      (if-let [resp (check-admin-access ctx)]
-                                        resp
-                                        (handler ctx))))]}
+                                  wrap-admin-access]}
             ["" {:get admin-dashboard
                  :name ::dashboard}]
             ["/content" {:post admin-content-handler

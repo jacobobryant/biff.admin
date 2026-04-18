@@ -28,13 +28,15 @@
        body]]))})
 
 (defn admin-fragment
-  "Render an HTML fragment for datastar SSE merging."
+  "Render an HTML fragment as a Datastar SSE response for @post/@get actions."
   [hiccup]
-  {:status 200
-   :headers {"Content-Type" "text/html; charset=utf-8"}
-   :body (str "<div id=\"admin-content\">"
-              (hiccup/render hiccup)
-              "</div>")})
+  (let [html (str "<div id=\"admin-content\">"
+                  (hiccup/render hiccup)
+                  "</div>")]
+    {:status 200
+     :headers {"Content-Type" "text/event-stream"
+               "Cache-Control" "no-cache"}
+     :body (str "event: datastar-merge-fragments\ndata: fragments " html "\n\n")}))
 
 (defn heading [text]
   [:h1.text-2xl.font-bold.mb-6 text])

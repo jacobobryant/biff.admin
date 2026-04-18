@@ -1,6 +1,7 @@
 (ns com.biffweb.admin-test
   (:require [clojure.test :refer [deftest is testing]]
-            [com.biffweb.admin :as admin]))
+            [com.biffweb.admin :as admin]
+            [tick.core :as t]))
 
 (deftest module-test
   (testing "module returns expected keys"
@@ -25,7 +26,33 @@
           auth-middleware (second middleware-fns)
           wrapped (auth-middleware identity)
           resp (wrapped ctx)]
-      (is (= 403 (:status resp))))))
+      (is (= 403 (:status resp)))))
+
+  (testing "admin dashboard shows setup page when user-id not set"
+    (let [m (admin/module {:biff.admin/get-user-events (fn [_] [])})
+          routes (:routes m)
+          middleware-fns (get-in routes [1 :middleware])
+          ctx {:session {:uid "some-user"}
+               :biff.admin/user-id nil
+               :biff.admin/get-user-events (fn [_] [])}
+          auth-middleware (second middleware-fns)
+          wrapped (auth-middleware identity)
+          resp (wrapped ctx)]
+      (is (= 200 (:status resp)))
+      (is (re-find #"biff.admin/user-id is not set" (:body resp)))))
+
+  (testing "admin dashboard passes through when UIDs match"
+    (let [m (admin/module {:biff.admin/get-user-events (fn [_] [])})
+          routes (:routes m)
+          middleware-fns (get-in routes [1 :middleware])
+          ctx {:session {:uid "admin-user"}
+               :biff.admin/user-id "admin-user"
+               :biff.admin/get-user-events (fn [_] [])}
+          auth-middleware (second middleware-fns)
+          wrapped (auth-middleware (fn [_] {:status 200 :body "dashboard"}))
+          resp (wrapped ctx)]
+      (is (= 200 (:status resp)))
+      (is (= "dashboard" (:body resp))))))
 
 (deftest wrap-profiling-test
   (testing "wrap-profiling passes through when no pstats"
