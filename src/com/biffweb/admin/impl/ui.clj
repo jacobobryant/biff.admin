@@ -1,8 +1,14 @@
 (ns com.biffweb.admin.impl.ui
   "UI helpers for the admin dashboard."
-  (:require [lambdaisland.hiccup :as hiccup]))
+  (:require [lambdaisland.hiccup :as hiccup]
+            [clojure.string :as str]))
 
 (def ^:private datastar-version "1.0.0-beta.11")
+
+(defn- render-html
+  "Render hiccup to HTML string, stripping the DOCTYPE that lambdaisland/hiccup adds."
+  [hiccup-form]
+  (str/replace (hiccup/render hiccup-form) #"^<!DOCTYPE html>\n?" ""))
 
 (defn admin-page
   "Render an admin page with consistent layout, including datastar."
@@ -12,7 +18,7 @@
    :body
    (str
     "<!DOCTYPE html>\n"
-    (hiccup/render
+    (render-html
      [:html {:lang "en"}
       [:head
        [:meta {:charset "utf-8"}]
@@ -31,12 +37,14 @@
   "Render an HTML fragment as a Datastar SSE response for @post/@get actions."
   [hiccup]
   (let [html (str "<div id=\"admin-content\">"
-                  (hiccup/render hiccup)
-                  "</div>")]
+                  (render-html hiccup)
+                  "</div>")
+        ;; SSE data lines cannot contain newlines; put all HTML on one line
+        single-line-html (str/replace html #"\n" "")]
     {:status 200
      :headers {"Content-Type" "text/event-stream"
                "Cache-Control" "no-cache"}
-     :body (str "event: datastar-merge-fragments\ndata: fragments " html "\n\n")}))
+     :body (str "event: datastar-merge-fragments\ndata: fragments " single-line-html "\n\n")}))
 
 (defn heading [text]
   [:h1.text-2xl.font-bold.mb-6 text])

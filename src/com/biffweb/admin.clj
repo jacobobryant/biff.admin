@@ -201,9 +201,9 @@
 (defn- admin-dashboard
   [ctx]
   (let [admin-content-url (str (:biff/base-url ctx "/") "_biff/admin/content")]
-    (ui/admin-page "Admin Dashboard"
+    (ui/admin-page "Admin"
       [:div
-       (ui/heading "Admin Dashboard")
+       (ui/heading "Admin")
        [:div {:data-signals-timezone "'UTC'"
               :data-on-load "$timezone = Intl.DateTimeFormat().resolvedOptions().timeZone"}
         [:div {:data-on-load (str "@post('" admin-content-url "')")
