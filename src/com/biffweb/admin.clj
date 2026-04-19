@@ -15,8 +15,7 @@
             [taoensso.tufte :as tufte]
             [taoensso.telemere :as tel]
             [taoensso.telemere.tools-logging :as tel.tl]
-            [tick.core :as t]
-            [ring.middleware.anti-forgery :as csrf])
+            [tick.core :as t])
   (:import [java.security SecureRandom]
            [java.io File]))
 
@@ -373,7 +372,8 @@
         pstats-formatted (some-> pstats-data tufte/format-pstats)
         recent-days (->> (keys dau) (take-last 30))
         resource-usage (get-resource-usage)
-        errors (when errors-atom @errors-atom)]
+        errors (when errors-atom @errors-atom)
+        anti-forgery-token (:anti-forgery-token ctx)]
     (ui/admin-fragment
      [:div
       ;; Usage Metrics
@@ -397,20 +397,18 @@
       ;; User List
       (ui/section "Users"
         (if (seq users)
-          (ui/users-table users)
+          (ui/users-table users anti-forgery-token)
           [:p.text-gray-500 "No user data available."]))
 
       ;; Recent Exceptions
       (when errors-atom
         (ui/section "Recent Exceptions"
-          (let [token (when (bound? #'csrf/*anti-forgery-token*)
-                        csrf/*anti-forgery-token*)]
-            [:div
+          [:div
              [:button.bg-red-600.text-white.px-3.py-1.rounded.text-sm.cursor-pointer.mb-4
               {:onclick (str "fetch('/_biff/admin/test-alert', {"
                              "method: 'POST',"
                              "headers: {'Content-Type': 'application/x-www-form-urlencoded'}"
-                             (when token (str ",body: '__anti-forgery-token=" token "'"))
+                             (when anti-forgery-token (str ",body: '__anti-forgery-token=" anti-forgery-token "'"))
                              "}).then(() => {"
                              "this.textContent='Alert sent!';"
                              "setTimeout(() => { this.textContent='Test alert'; location.reload(); }, 2000);"
@@ -421,7 +419,7 @@
               "Test alert"]
              (if (seq errors)
                (ui/exceptions-table errors)
-               [:p.text-gray-500 "No exceptions recorded."])])))])))
+               [:p.text-gray-500 "No exceptions recorded."])]))])))
 
 (defn- admin-dashboard
   [ctx]
