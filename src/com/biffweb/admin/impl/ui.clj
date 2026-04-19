@@ -111,10 +111,12 @@
         [:td.p-2.border-b (str joined-at)]
         [:td.p-2.border-b
          [:button.bg-indigo-600.text-white.px-2.py-1.rounded.text-xs.cursor-pointer
-          {:onclick (str "fetch('/_biff/admin/generate-signin-code', {"
+          {:data-user-id (pr-str user-id)
+           :onclick (str "var uid = this.dataset.userId;"
+                         "fetch('/_biff/admin/generate-signin-code', {"
                          "method: 'POST',"
                          "headers: {'Content-Type': 'application/x-www-form-urlencoded'},"
-                         "body: 'user-id=' + encodeURIComponent('" user-id "')"
+                         "body: 'user-id=' + encodeURIComponent(uid)"
                          (when anti-forgery-token
                            (str " + '&__anti-forgery-token=' + encodeURIComponent('" anti-forgery-token "')"))
                          "}).then(r => r.json()).then(d => {"

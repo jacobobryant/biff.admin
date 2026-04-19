@@ -296,7 +296,7 @@
                         (get-in ctx [:query-params "user-id"]))
         code (generate-secure-code 32)
         base (base-url-from-request ctx)]
-    (swap! signin-codes assoc code {:user-id-str (pr-str (edn/read-string user-id-str))
+    (swap! signin-codes assoc code {:user-id (edn/read-string user-id-str)
                                     :generated-at (t/now)})
     {:status 200
      :headers {"content-type" "application/json"}
@@ -317,7 +317,7 @@
         (swap! signin-codes dissoc code)
         {:status 302
          :headers {"location" "/"}
-         :session (assoc session :uid (edn/read-string (:user-id-str entry)))})
+         :session (assoc session :uid (:user-id entry))})
       {:status 401
        :headers {"content-type" "text/plain"}
        :body "Unauthorized"})))
@@ -384,6 +384,12 @@
         (when-not (seq recent-days)
           [:p.text-gray-500 "No activity data available."]))
 
+      ;; User List
+      (ui/section "Users"
+        (if (seq users)
+          (ui/users-table users anti-forgery-token)
+          [:p.text-gray-500 "No user data available."]))
+
       ;; Performance Metrics
       (ui/section "Performance Metrics"
         (if pstats-formatted
@@ -394,12 +400,6 @@
       ;; Resource Usage
       (ui/section "Resource Usage"
         (ui/resource-usage-table resource-usage))
-
-      ;; User List
-      (ui/section "Users"
-        (if (seq users)
-          (ui/users-table users anti-forgery-token)
-          [:p.text-gray-500 "No user data available."]))
 
       ;; Recent Exceptions
       (when errors-atom
