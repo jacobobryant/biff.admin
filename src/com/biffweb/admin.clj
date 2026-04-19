@@ -11,6 +11,7 @@
    - Middleware for HTTP handler profiling
    - Helper for wrapping biff.graph resolvers with profiling"
   (:require [com.biffweb.admin.impl.ui :as ui]
+            [clojure.edn :as edn]
             [clojure.string :as str]
             [taoensso.tufte :as tufte]
             [taoensso.telemere :as tel]
@@ -291,11 +292,11 @@
 
 (defn- generate-signin-code-handler
   [{:biff.admin/keys [signin-codes] :as ctx}]
-  (let [user-id (or (get-in ctx [:params :user-id])
-                     (get-in ctx [:query-params "user-id"]))
+  (let [user-id-str (or (get-in ctx [:params :user-id])
+                        (get-in ctx [:query-params "user-id"]))
         code (generate-secure-code 32)
         base (base-url-from-request ctx)]
-    (swap! signin-codes assoc code {:user-id user-id
+    (swap! signin-codes assoc code {:user-id-str (pr-str (edn/read-string user-id-str))
                                     :generated-at (t/now)})
     {:status 200
      :headers {"content-type" "application/json"}
@@ -316,7 +317,7 @@
         (swap! signin-codes dissoc code)
         {:status 302
          :headers {"location" "/"}
-         :session (assoc session :uid (:user-id entry))})
+         :session (assoc session :uid (edn/read-string (:user-id-str entry)))})
       {:status 401
        :headers {"content-type" "text/plain"}
        :body "Unauthorized"})))
