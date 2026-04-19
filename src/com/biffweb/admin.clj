@@ -3,14 +3,21 @@
 
    Provides:
    - Performance metrics via tufte profiling
-   - Business metrics (DAU, WAU, revenue)
-   - User list
+   - Usage metrics (DAU, WAU, signups, revenue)
+   - User list with impersonation
+   - Resource usage monitoring (CPU, RAM, disk)
+   - Error alerting via email with rate limiting
+   - Health check endpoint
    - Middleware for HTTP handler profiling
    - Helper for wrapping biff.graph resolvers with profiling"
   (:require [com.biffweb.admin.impl.ui :as ui]
             [clojure.string :as str]
             [taoensso.tufte :as tufte]
-            [tick.core :as t]))
+            [taoensso.telemere :as tel]
+            [taoensso.telemere.tools-logging :as tel.tl]
+            [tick.core :as t])
+  (:import [java.security SecureRandom]
+           [java.io File]))
 
 ;; ============================================================
 ;; Profiling helpers
@@ -61,7 +68,7 @@
              (profile! ctx (str id) #(orig-resolve ctx input))))))
 
 ;; ============================================================
-;; Business metrics
+;; Usage metrics
 ;; ============================================================
 
 (defn- day-key
@@ -114,6 +121,20 @@
                    [day unique-users])))
           days)))
 
+(defn- compute-daily-signups
+  "Compute daily signups from user joined-at dates.
+   Returns a sorted map of date -> count."
+  [users tz now]
+  (let [today (t/date (t/in now tz))
+        cutoff (t/<< today (t/new-period 30 :days))]
+    (->> users
+         (filter :joined-at)
+         (filter #(t/<= cutoff (day-key (:joined-at %) tz)))
+         (group-by #(day-key (:joined-at %) tz))
+         (reduce-kv (fn [m day u]
+                      (assoc m day (count u)))
+                    (sorted-map)))))
+
 (defn- compute-daily-revenue
   "Compute daily revenue from revenue events.
    Filters out events older than 30 days."
@@ -126,6 +147,178 @@
          (reduce-kv (fn [m day evts]
                       (assoc m day (reduce + 0 (map :revenue evts))))
                     (sorted-map)))))
+
+;; ============================================================
+;; Resource usage
+;; ============================================================
+
+(defn- get-resource-usage
+  "Returns a map of current system resource usage."
+  []
+  (let [runtime (Runtime/getRuntime)
+        total-mem (.totalMemory runtime)
+        free-mem (.freeMemory runtime)
+        max-mem (.maxMemory runtime)
+        used-mem (- total-mem free-mem)
+        ;; Disk usage for root filesystem
+        root (File. "/")
+        disk-total (.getTotalSpace root)
+        disk-free (.getUsableSpace root)
+        disk-used (- disk-total disk-free)
+        ;; CPU - use /proc/loadavg on Linux
+        load-avg (try
+                   (let [content (slurp "/proc/loadavg")]
+                     (Double/parseDouble (first (str/split content #"\s+"))))
+                   (catch Exception _
+                     (try
+                       (.getSystemLoadAverage
+                        (java.lang.management.ManagementFactory/getOperatingSystemMXBean))
+                       (catch Exception _ -1.0))))
+        cpu-count (.availableProcessors runtime)]
+    {:ram-used used-mem
+     :ram-total max-mem
+     :ram-pct (if (pos? max-mem) (* 100.0 (/ used-mem (double max-mem))) 0)
+     :disk-used disk-used
+     :disk-total disk-total
+     :disk-pct (if (pos? disk-total) (* 100.0 (/ disk-used (double disk-total))) 0)
+     :cpu-load load-avg
+     :cpu-count cpu-count}))
+
+;; ============================================================
+;; Error alerting
+;; ============================================================
+
+(defn- generate-secure-code
+  "Generate a URL-safe random code string."
+  [n-bytes]
+  (let [sr (SecureRandom.)
+        bs (byte-array n-bytes)]
+    (.nextBytes sr bs)
+    (str/replace
+     (.encodeToString (java.util.Base64/getUrlEncoder) bs)
+     #"=" "")))
+
+(defn- handle-error
+  "Telemere signal handler for error alerting. Batches errors and sends email
+   alerts with rate limiting."
+  [{:biff/keys [send-email]
+    :biff.admin/keys [errors-atom alert-state]
+    :as ctx}
+   signal]
+  (when (= (:level signal) :error)
+    (let [max-errors 20
+          rate-limit-seconds (* 60 5)
+          now-seconds (/ (System/nanoTime) (* 1000 1000 1000.0))
+          formatted (try
+                      ((tel/format-signal-fn {}) signal)
+                      (catch Exception e
+                        (str "Error formatting signal: " e "\n" (pr-str signal))))
+          error-entry {:message (or (some-> signal :error .getMessage) "Unknown error")
+                       :stack-trace formatted
+                       :timestamp (t/now)}]
+      ;; Store in errors atom (keep last 20)
+      (when errors-atom
+        (swap! errors-atom (fn [errors]
+                             (vec (take-last max-errors (conj errors error-entry))))))
+      ;; Handle batched email alerting
+      (when (and send-email alert-state)
+        (let [{:keys [batch]} (swap! alert-state
+                                     (fn [{:keys [pending last-sent-at]}]
+                                       (let [pending (conj (or pending []) formatted)]
+                                         (if (< rate-limit-seconds (- now-seconds (or last-sent-at 0)))
+                                           {:batch pending
+                                            :pending []
+                                            :last-sent-at now-seconds}
+                                           {:pending pending
+                                            :last-sent-at (or last-sent-at 0)}))))]
+          (when (not-empty batch)
+            (try
+              (let [error-text (str/join "\n\n---\n\n" (take-last max-errors batch))
+                    preview (subs error-text 0 (min 1000 (count error-text)))]
+                (send-email ctx
+                            {:subject "Application error alert"
+                             :text error-text
+                             :html (str "<pre>" preview "</pre>")}))
+              (catch Exception e
+                ;; Log but don't re-throw to avoid infinite loops
+                (binding [*out* *err*]
+                  (println "Failed to send error alert email:" (.getMessage e)))))))))))
+
+(defn use-alerts
+  "Biff component that sets up error alerting via telemere.
+   Calls tools-logging->telemere! to capture all logging.
+   Stores recent exceptions in an atom for the admin dashboard.
+
+   Expects :biff/send-email in ctx for email alerting."
+  [ctx]
+  (tel.tl/tools-logging->telemere!)
+  (let [errors-atom (atom [])
+        alert-state (atom {:pending [] :last-sent-at 0})
+        ctx (assoc ctx
+                   :biff.admin/errors-atom errors-atom
+                   :biff.admin/alert-state alert-state)]
+    (tel/add-handler! :biff.admin/alerts
+                      (fn [signal] (handle-error ctx signal)))
+    (update ctx :biff/stop conj #(tel/remove-handler! :biff.admin/alerts))))
+
+;; ============================================================
+;; Health check
+;; ============================================================
+
+(defn- health-handler
+  [{:biff.admin/keys [healthy?] :as ctx}]
+  (let [healthy (if healthy?
+                  (try (healthy? ctx) (catch Exception _ false))
+                  true)]
+    {:status (if healthy 200 503)
+     :headers {"content-type" "text/plain"}
+     :body (if healthy "healthy" "unhealthy")}))
+
+;; ============================================================
+;; Impersonation / sign-in codes
+;; ============================================================
+
+(defn- base-url-from-request
+  "Infer the base URL from an incoming request."
+  [ctx]
+  (let [scheme (or (some-> ctx :headers (get "x-forwarded-proto"))
+                   (name (or (:scheme ctx) :http)))
+        host (or (some-> ctx :headers (get "x-forwarded-host"))
+                 (get-in ctx [:headers "host"])
+                 "localhost")]
+    (str scheme "://" host)))
+
+(defn- generate-signin-code-handler
+  [{:biff.admin/keys [signin-codes] :as ctx}]
+  (let [user-id (or (get-in ctx [:params :user-id])
+                     (get-in ctx [:query-params "user-id"]))
+        code (generate-secure-code 32)
+        base (base-url-from-request ctx)]
+    (swap! signin-codes assoc code {:user-id user-id
+                                    :generated-at (t/now)})
+    {:status 200
+     :headers {"content-type" "application/json"}
+     :body (str "{\"url\":\"" base "/_biff/admin/signin/" code "\"}")}))
+
+(defn- signin-handler
+  [{:biff.admin/keys [signin-codes]
+    :keys [path-params session]
+    :as ctx}]
+  (let [code (:code path-params)
+        entry (get @signin-codes code)
+        now (t/now)
+        valid? (and entry
+                    (t/< (t/between (:generated-at entry) now)
+                         (t/new-duration 5 :minutes)))]
+    (if valid?
+      (do
+        (swap! signin-codes dissoc code)
+        {:status 302
+         :headers {"location" "/"}
+         :session (assoc session :uid (:user-id entry))})
+      {:status 401
+       :headers {"content-type" "text/plain"}
+       :body "Unauthorized"})))
 
 ;; ============================================================
 ;; Admin routes
@@ -162,26 +355,29 @@
         (handler ctx)))))
 
 (defn- admin-dashboard-content
-  [{:biff.admin/keys [pstats get-user-events get-revenue-events get-users]
+  [{:biff.admin/keys [pstats get-user-events get-revenue-events get-users errors-atom]
     :as ctx}
    timezone]
   (let [tz (try (t/zone timezone) (catch Exception _ (t/zone "UTC")))
         now (t/now)
         user-events (when get-user-events (get-user-events ctx))
         revenue-events (when get-revenue-events (get-revenue-events ctx))
+        users (when get-users (get-users ctx))
         dau (compute-dau (or user-events []) tz now)
         wau (compute-wau (or user-events []) tz now)
+        daily-signups (when users (compute-daily-signups users tz now))
         daily-revenue (when revenue-events (compute-daily-revenue revenue-events tz now))
         pstats-data (when pstats @pstats)
         pstats-formatted (some-> pstats-data tufte/format-pstats)
         recent-days (->> (keys dau) (take-last 30))
-        users (when get-users (get-users ctx))]
+        resource-usage (get-resource-usage)
+        errors (when errors-atom @errors-atom)]
     (ui/admin-fragment
      [:div
-      ;; Business Metrics
-      (ui/section "Business Metrics"
+      ;; Usage Metrics
+      (ui/section "Usage Metrics"
         (when (seq recent-days)
-          (ui/metrics-table recent-days dau wau daily-revenue))
+          (ui/metrics-table recent-days dau wau daily-signups daily-revenue))
         (when-not (seq recent-days)
           [:p.text-gray-500 "No activity data available."]))
 
@@ -192,11 +388,22 @@
            (str pstats-formatted)]
           [:p.text-gray-500 "No performance data collected yet."]))
 
+      ;; Resource Usage
+      (ui/section "Resource Usage"
+        (ui/resource-usage-table resource-usage))
+
       ;; User List
       (ui/section "Users"
         (if (seq users)
           (ui/users-table users)
-          [:p.text-gray-500 "No user data available."]))])))
+          [:p.text-gray-500 "No user data available."]))
+
+      ;; Recent Exceptions
+      (when errors-atom
+        (ui/section "Recent Exceptions"
+          (if (seq errors)
+            (ui/exceptions-table errors)
+            [:p.text-gray-500 "No exceptions recorded."])))])))
 
 (defn- admin-dashboard
   [ctx]
@@ -220,6 +427,30 @@
                      "UTC")]
     (admin-dashboard-content ctx timezone)))
 
+(defn- stacktrace-page-handler
+  [{:biff.admin/keys [errors-atom] :as ctx}]
+  (let [index (try (Integer/parseInt (or (get-in ctx [:params :index])
+                                         (get-in ctx [:query-params "index"])
+                                         (get-in ctx [:path-params :index])
+                                         "0"))
+                   (catch Exception _ 0))
+        errors (when errors-atom @errors-atom)
+        error (get (vec errors) index)]
+    (if error
+      (ui/admin-page "Stack Trace"
+        [:div
+         (ui/heading "Stack Trace")
+         [:p.text-sm.text-gray-600.mb-2 (str "Error at " (:timestamp error))]
+         [:p.font-semibold.mb-4 (:message error)]
+         [:button.bg-blue-600.text-white.px-4.py-2.rounded.mb-4.cursor-pointer
+          {:onclick (str "navigator.clipboard.writeText(document.getElementById('stacktrace').textContent);"
+                         "this.textContent='Copied!';"
+                         "setTimeout(()=>this.textContent='Copy to clipboard',2000)")}
+          "Copy to clipboard"]
+         [:pre#stacktrace.bg-gray-100.p-4.rounded.text-xs.overflow-x-auto.whitespace-pre-wrap
+          (:stack-trace error)]])
+      {:status 404 :headers {"content-type" "text/plain"} :body "Not found"})))
+
 (defn- wrap-admin-params
   "Middleware that merges admin parameters into the request.
    Used with Reitit vector syntax: [wrap-admin-params params]."
@@ -237,14 +468,25 @@
    - :biff.admin/get-revenue-events - (optional) fn [ctx] -> [{:revenue ... :instant ...} ...]
    - :biff.admin/get-users - (optional) fn [ctx] -> [{:user-id ... :joined-at ... :email ...} ...]
    - :biff.admin/get-route-id - (optional) fn [ctx] -> string, overrides default route ID extraction
+   - :biff.admin/healthy? - (optional) fn [ctx] -> truthy, for health endpoint
 
    Returns a module map with :routes and :biff/init."
   [params]
   {:biff/init (fn [_modules-var]
-                {:biff.admin/pstats (atom nil)})
-   :routes ["/_biff/admin" {:middleware [[wrap-admin-params params]
-                                        wrap-admin-access]}
-            ["" {:get admin-dashboard
-                 :name ::dashboard}]
-            ["/content" {:get admin-content-handler
-                         :name ::content}]]})
+                {:biff.admin/pstats (atom nil)
+                 :biff.admin/signin-codes (atom {})})
+   :routes ["/_biff/admin" {:middleware [[wrap-admin-params params]]}
+            ["/health" {:get health-handler
+                        :name ::health}]
+            ["/signin/:code" {:get signin-handler
+                              :name ::signin}]
+            ["" {:middleware [wrap-admin-access]}
+             ["" {:get admin-dashboard
+                  :name ::dashboard}]
+             ["/content" {:get admin-content-handler
+                          :name ::content}]
+             ["/stacktrace/:index" {:get stacktrace-page-handler
+                                    :name ::stacktrace}]
+             ["/generate-signin-code" {:post generate-signin-code-handler
+                                       :name ::generate-signin-code}]]]})
+
