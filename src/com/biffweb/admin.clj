@@ -15,7 +15,8 @@
             [taoensso.tufte :as tufte]
             [taoensso.telemere :as tel]
             [taoensso.telemere.tools-logging :as tel.tl]
-            [tick.core :as t])
+            [tick.core :as t]
+            [ring.middleware.anti-forgery :as csrf])
   (:import [java.security SecureRandom]
            [java.io File]))
 
@@ -202,7 +203,7 @@
   "Telemere signal handler for error alerting. Batches errors and sends email
    alerts with rate limiting."
   [{:biff/keys [send-email]
-    :biff.admin/keys [errors-atom alert-state]
+    :biff.admin/keys [errors-atom alert-state alert-email]
     :as ctx}
    signal]
   (when (= (:level signal) :error)
@@ -220,8 +221,8 @@
       (when errors-atom
         (swap! errors-atom (fn [errors]
                              (vec (take-last max-errors (conj errors error-entry))))))
-      ;; Handle batched email alerting
-      (when (and send-email alert-state)
+      ;; Handle batched email alerting (only if both send-email and alert-email are set)
+      (when (and send-email alert-email alert-state)
         (let [{:keys [batch]} (swap! alert-state
                                      (fn [{:keys [pending last-sent-at]}]
                                        (let [pending (conj (or pending []) formatted)]
@@ -236,7 +237,8 @@
               (let [error-text (str/join "\n\n---\n\n" (take-last max-errors batch))
                     preview (subs error-text 0 (min 1000 (count error-text)))]
                 (send-email ctx
-                            {:subject "Application error alert"
+                            {:to alert-email
+                             :subject "Application error alert"
                              :text error-text
                              :html (str "<pre>" preview "</pre>")}))
               (catch Exception e
@@ -401,9 +403,25 @@
       ;; Recent Exceptions
       (when errors-atom
         (ui/section "Recent Exceptions"
-          (if (seq errors)
-            (ui/exceptions-table errors)
-            [:p.text-gray-500 "No exceptions recorded."])))])))
+          (let [token (when (bound? #'csrf/*anti-forgery-token*)
+                        csrf/*anti-forgery-token*)]
+            [:div
+             [:button.bg-red-600.text-white.px-3.py-1.rounded.text-sm.cursor-pointer.mb-4
+              {:onclick (str "fetch('/_biff/admin/test-alert', {"
+                             "method: 'POST',"
+                             "headers: {'Content-Type': 'application/x-www-form-urlencoded'}"
+                             (when token (str ",body: '__anti-forgery-token=" token "'"))
+                             "}).then(() => {"
+                             "this.textContent='Alert sent!';"
+                             "setTimeout(() => { this.textContent='Test alert'; location.reload(); }, 2000);"
+                             "}).catch(() => {"
+                             "this.textContent='Alert sent!';"
+                             "setTimeout(() => { this.textContent='Test alert'; location.reload(); }, 2000);"
+                             "});")}
+              "Test alert"]
+             (if (seq errors)
+               (ui/exceptions-table errors)
+               [:p.text-gray-500 "No exceptions recorded."])])))])))
 
 (defn- admin-dashboard
   [ctx]
@@ -458,6 +476,11 @@
   (fn [ctx]
     (handler (merge ctx params))))
 
+(defn- test-alert-handler
+  "Handler that throws an unhandled exception to test error alerting."
+  [_ctx]
+  (throw (ex-info "Test alert from admin dashboard" {:type :test-alert})))
+
 ;; ============================================================
 ;; Module
 ;; ============================================================
@@ -488,5 +511,7 @@
              ["/stacktrace/:index" {:get stacktrace-page-handler
                                     :name ::stacktrace}]
              ["/generate-signin-code" {:post generate-signin-code-handler
-                                       :name ::generate-signin-code}]]]})
+                                       :name ::generate-signin-code}]
+             ["/test-alert" {:post test-alert-handler
+                             :name ::test-alert}]]]})
 

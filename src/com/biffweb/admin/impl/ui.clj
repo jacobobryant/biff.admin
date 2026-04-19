@@ -1,7 +1,8 @@
 (ns com.biffweb.admin.impl.ui
   "UI helpers for the admin dashboard."
   (:require [lambdaisland.hiccup :as hiccup]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [ring.middleware.anti-forgery :as csrf]))
 
 (defn- render-html
   "Render hiccup to HTML string, stripping the DOCTYPE that lambdaisland/hiccup adds."
@@ -110,17 +111,21 @@
         [:td.p-2.border-b.font-mono.text-xs (str user-id)]
         [:td.p-2.border-b (str joined-at)]
         [:td.p-2.border-b
-         [:button.bg-indigo-600.text-white.px-2.py-1.rounded.text-xs.cursor-pointer
-          {:onclick (str "fetch('/_biff/admin/generate-signin-code', {"
-                         "method: 'POST',"
-                         "headers: {'Content-Type': 'application/x-www-form-urlencoded'},"
-                         "body: 'user-id=" user-id "'"
-                         "}).then(r => r.json()).then(d => {"
-                         "navigator.clipboard.writeText(d.url);"
-                         "this.textContent='Copied!';"
-                         "setTimeout(() => this.textContent='Copy sign-in link', 2000);"
-                         "});")}
-          "Copy sign-in link"]]])]]])
+         (let [token (when (bound? #'csrf/*anti-forgery-token*)
+                       csrf/*anti-forgery-token*)]
+           [:button.bg-indigo-600.text-white.px-2.py-1.rounded.text-xs.cursor-pointer
+            {:onclick (str "fetch('/_biff/admin/generate-signin-code', {"
+                           "method: 'POST',"
+                           "headers: {'Content-Type': 'application/x-www-form-urlencoded'},"
+                           "body: 'user-id=" user-id
+                           (when token (str "&__anti-forgery-token=" token))
+                           "'"
+                           "}).then(r => r.json()).then(d => {"
+                           "navigator.clipboard.writeText(d.url);"
+                           "this.textContent='Copied!';"
+                           "setTimeout(() => this.textContent='Copy sign-in link', 2000);"
+                           "});")}
+            "Copy sign-in link"])]])]]])
 
 (defn exceptions-table
   "Render a table of recent exceptions."
