@@ -408,7 +408,8 @@
               {:onclick (str "fetch('/_biff/admin/test-alert', {"
                              "method: 'POST',"
                              "headers: {'Content-Type': 'application/x-www-form-urlencoded'}"
-                             (when anti-forgery-token (str ",body: '__anti-forgery-token=" anti-forgery-token "'"))
+                             (when anti-forgery-token
+                               (str ",body: '__anti-forgery-token=' + encodeURIComponent('" anti-forgery-token "')"))
                              "}).then(() => {"
                              "this.textContent='Alert sent!';"
                              "setTimeout(() => { this.textContent='Test alert'; location.reload(); }, 2000);"

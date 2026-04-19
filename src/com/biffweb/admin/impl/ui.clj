@@ -114,9 +114,9 @@
           {:onclick (str "fetch('/_biff/admin/generate-signin-code', {"
                          "method: 'POST',"
                          "headers: {'Content-Type': 'application/x-www-form-urlencoded'},"
-                         "body: 'user-id=" user-id
-                         (when anti-forgery-token (str "&__anti-forgery-token=" anti-forgery-token))
-                         "'"
+                         "body: 'user-id=' + encodeURIComponent('" user-id "')"
+                         (when anti-forgery-token
+                           (str " + '&__anti-forgery-token=' + encodeURIComponent('" anti-forgery-token "')"))
                          "}).then(r => r.json()).then(d => {"
                          "navigator.clipboard.writeText(d.url);"
                          "this.textContent='Copied!';"
