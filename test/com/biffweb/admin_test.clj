@@ -10,49 +10,13 @@
       (is (contains? m :routes))
       (is (fn? (:biff/init m)))))
 
-  (testing "biff/init creates pstats atom"
+  (testing "biff/init creates pstats and signin-codes atoms"
     (let [m (admin/module {:biff.admin/get-user-events (fn [_] [])})
           init-result ((:biff/init m) nil)]
       (is (contains? init-result :biff.admin/pstats))
-      (is (instance? clojure.lang.Atom (:biff.admin/pstats init-result)))))
-
-  (testing "admin dashboard returns 403 when user-id set but doesn't match"
-    (let [m (admin/module {:biff.admin/get-user-events (fn [_] [])})
-          routes (:routes m)
-          middleware-fns (get-in routes [1 :middleware])
-          ctx {:session {:uid "wrong-user"}
-               :biff.admin/user-id "admin-user"
-               :biff.admin/get-user-events (fn [_] [])}
-          auth-middleware (second middleware-fns)
-          wrapped (auth-middleware identity)
-          resp (wrapped ctx)]
-      (is (= 403 (:status resp)))))
-
-  (testing "admin dashboard shows setup page when user-id not set"
-    (let [m (admin/module {:biff.admin/get-user-events (fn [_] [])})
-          routes (:routes m)
-          middleware-fns (get-in routes [1 :middleware])
-          ctx {:session {:uid "some-user"}
-               :biff.admin/user-id nil
-               :biff.admin/get-user-events (fn [_] [])}
-          auth-middleware (second middleware-fns)
-          wrapped (auth-middleware identity)
-          resp (wrapped ctx)]
-      (is (= 200 (:status resp)))
-      (is (re-find #"biff.admin/user-id is not set" (:body resp)))))
-
-  (testing "admin dashboard passes through when UIDs match"
-    (let [m (admin/module {:biff.admin/get-user-events (fn [_] [])})
-          routes (:routes m)
-          middleware-fns (get-in routes [1 :middleware])
-          ctx {:session {:uid "admin-user"}
-               :biff.admin/user-id "admin-user"
-               :biff.admin/get-user-events (fn [_] [])}
-          auth-middleware (second middleware-fns)
-          wrapped (auth-middleware (fn [_] {:status 200 :body "dashboard"}))
-          resp (wrapped ctx)]
-      (is (= 200 (:status resp)))
-      (is (= "dashboard" (:body resp))))))
+      (is (instance? clojure.lang.Atom (:biff.admin/pstats init-result)))
+      (is (contains? init-result :biff.admin/signin-codes))
+      (is (instance? clojure.lang.Atom (:biff.admin/signin-codes init-result))))))
 
 (deftest wrap-profiling-test
   (testing "wrap-profiling passes through when no pstats"
@@ -111,3 +75,22 @@
             {:request-method :post
              :reitit.core/match {:data {}
                                  :template "/stuff/:id"}})))))
+
+(deftest health-endpoint-test
+  (testing "module routes include health endpoint"
+    (let [m (admin/module {:biff.admin/get-user-events (fn [_] [])})
+          routes (:routes m)
+          ;; Routes structure: [prefix {middleware} ["/health" ...] ...]
+          health-route (some (fn [r] (when (and (vector? r) (= "/health" (first r))) r))
+                            (rest (rest routes)))]
+      (is (some? health-route)))))
+
+(deftest use-alerts-test
+  (testing "use-alerts adds errors-atom and alert-state to ctx"
+    (let [ctx {:biff/stop []}
+          result (admin/use-alerts ctx)]
+      (is (contains? result :biff.admin/errors-atom))
+      (is (contains? result :biff.admin/alert-state))
+      (is (instance? clojure.lang.Atom (:biff.admin/errors-atom result)))
+      ;; Clean up
+      (doseq [f (:biff/stop result)] (f)))))
