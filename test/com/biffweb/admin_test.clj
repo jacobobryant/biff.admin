@@ -7,7 +7,9 @@
   (testing "module returns expected keys"
     (let [m (admin/module {:biff.admin/get-user-events (fn [_] [])})]
       (is (contains? m :biff/init))
-      (is (contains? m :routes))
+      (is (contains? m :biff.ring/routes))
+      (is (= [admin/wrap-profiling] (:biff.ring/base-middleware m)))
+      (is (= [admin/wrap-resolver-profiling] (:biff.graph/middleware m)))
       (is (fn? (:biff/init m)))))
 
   (testing "biff/init creates pstats and signin-codes atoms"
@@ -79,7 +81,7 @@
 (deftest health-endpoint-test
   (testing "module routes include health endpoint"
     (let [m (admin/module {:biff.admin/get-user-events (fn [_] [])})
-          routes (:routes m)
+          routes (:biff.ring/routes m)
           ;; Routes structure: [prefix {middleware} ["/health" ...] ...]
           health-route (some (fn [r] (when (and (vector? r) (= "/health" (first r))) r))
                             (rest (rest routes)))]
