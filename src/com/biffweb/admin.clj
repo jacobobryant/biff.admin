@@ -493,25 +493,27 @@
    - :biff.admin/get-route-id - (optional) fn [ctx] -> string, overrides default route ID extraction
    - :biff.admin/healthy? - (optional) fn [ctx] -> truthy, for health endpoint
 
-   Returns a module map with :routes and :biff/init."
+   Returns a module map with :biff.ring/routes, :biff.ring/base-middleware,
+   :biff.graph/middleware, and :biff/init."
   [params]
   {:biff/init (fn [_modules-var]
                 {:biff.admin/pstats (atom nil)
                  :biff.admin/signin-codes (atom {})})
-   :routes ["/_biff/admin" {:middleware [[wrap-admin-params params]]}
-            ["/health" {:get health-handler
-                        :name ::health}]
-            ["/signin/:code" {:get signin-handler
-                              :name ::signin}]
-            ["" {:middleware [wrap-admin-access]}
-             ["" {:get admin-dashboard
-                  :name ::dashboard}]
-             ["/content" {:get admin-content-handler
-                          :name ::content}]
-             ["/stacktrace/:index" {:get stacktrace-page-handler
-                                    :name ::stacktrace}]
-             ["/generate-signin-code" {:post generate-signin-code-handler
-                                       :name ::generate-signin-code}]
-             ["/test-alert" {:post test-alert-handler
-                             :name ::test-alert}]]]})
-
+   :biff.ring/routes ["/_biff/admin" {:middleware [[wrap-admin-params params]]}
+                      ["/health" {:get health-handler
+                                  :name ::health}]
+                      ["/signin/:code" {:get signin-handler
+                                        :name ::signin}]
+                      ["" {:middleware [wrap-admin-access]}
+                       ["" {:get admin-dashboard
+                            :name ::dashboard}]
+                       ["/content" {:get admin-content-handler
+                                    :name ::content}]
+                       ["/stacktrace/:index" {:get stacktrace-page-handler
+                                              :name ::stacktrace}]
+                       ["/generate-signin-code" {:post generate-signin-code-handler
+                                                 :name ::generate-signin-code}]
+                       ["/test-alert" {:post test-alert-handler
+                                       :name ::test-alert}]]]
+   :biff.ring/base-middleware [wrap-profiling]
+   :biff.graph/middleware [wrap-resolver-profiling]})
