@@ -494,14 +494,14 @@
    - :biff.admin/healthy? - (optional) fn [ctx] -> truthy, for health endpoint
 
    Returns a module map with :biff.ring/routes, :biff.ring/base-middleware,
-   :biff.graph/middleware, and :biff/init."
+   :biff.graph/middleware, and :biff.core/init."
   [params]
-  {:biff/init (fn [_modules-var]
-                {:biff.admin/pstats (atom nil)
-                 :biff.admin/signin-codes (atom {})})
+  {:biff.core/init (fn [_modules-var]
+                     {:biff.admin/pstats (atom nil)
+                      :biff.admin/signin-codes (atom {})})
    :biff.ring/routes ["/_biff/admin" {:middleware [[wrap-admin-params params]]}
-                      ["/health" {:get health-handler
-                                  :name ::health}]
+                       ["/health" {:get health-handler
+                                   :name ::health}]
                       ["/signin/:code" {:get signin-handler
                                         :name ::signin}]
                       ["" {:middleware [wrap-admin-access]}

@@ -6,15 +6,15 @@
 (deftest module-test
   (testing "module returns expected keys"
     (let [m (admin/module {:biff.admin/get-user-events (fn [_] [])})]
-      (is (contains? m :biff/init))
+      (is (contains? m :biff.core/init))
       (is (contains? m :biff.ring/routes))
       (is (= [admin/wrap-profiling] (:biff.ring/base-middleware m)))
       (is (= [admin/wrap-resolver-profiling] (:biff.graph/middleware m)))
-      (is (fn? (:biff/init m)))))
+      (is (fn? (:biff.core/init m)))))
 
-  (testing "biff/init creates pstats and signin-codes atoms"
+  (testing "biff.core/init creates pstats and signin-codes atoms"
     (let [m (admin/module {:biff.admin/get-user-events (fn [_] [])})
-          init-result ((:biff/init m) nil)]
+          init-result ((:biff.core/init m) nil)]
       (is (contains? init-result :biff.admin/pstats))
       (is (instance? clojure.lang.Atom (:biff.admin/pstats init-result)))
       (is (contains? init-result :biff.admin/signin-codes))
