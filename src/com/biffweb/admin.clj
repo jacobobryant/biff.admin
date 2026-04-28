@@ -202,8 +202,7 @@
 (defn- handle-error
   "Telemere signal handler for error alerting. Batches errors and sends email
    alerts with rate limiting."
-  [{:biff/keys [send-email]
-    :biff.admin/keys [errors-atom alert-state alert-email]
+  [{:biff.admin/keys [send-email errors-atom alert-state alert-email]
     :as ctx}
    signal]
   (when (= (:level signal) :error)
@@ -251,7 +250,7 @@
    Calls tools-logging->telemere! to capture all logging.
    Stores recent exceptions in an atom for the admin dashboard.
 
-   Expects :biff/send-email in ctx for email alerting."
+   Expects :biff.admin/send-email in ctx for email alerting."
   [ctx]
   (tel.tl/tools-logging->telemere!)
   (let [errors-atom (atom [])
@@ -261,7 +260,7 @@
                    :biff.admin/alert-state alert-state)]
     (tel/add-handler! :biff.admin/alerts
                       (fn [signal] (handle-error ctx signal)))
-    (update ctx :biff/stop conj #(tel/remove-handler! :biff.admin/alerts))))
+    (update ctx :biff.core/stop conj #(tel/remove-handler! :biff.admin/alerts))))
 
 ;; ============================================================
 ;; Health check
