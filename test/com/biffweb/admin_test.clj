@@ -89,10 +89,10 @@
 
 (deftest use-alerts-test
   (testing "use-alerts adds errors-atom and alert-state to ctx"
-    (let [ctx {:biff/stop []}
+    (let [ctx {:biff.core/stop []}
           result (admin/use-alerts ctx)]
       (is (contains? result :biff.admin/errors-atom))
       (is (contains? result :biff.admin/alert-state))
       (is (instance? clojure.lang.Atom (:biff.admin/errors-atom result)))
       ;; Clean up
-      (doseq [f (:biff/stop result)] (f)))))
+      (doseq [f (:biff.core/stop result)] (f)))))
