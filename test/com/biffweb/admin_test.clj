@@ -1,12 +1,18 @@
 (ns com.biffweb.admin-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [com.biffweb.admin :as admin]
+            [taoensso.tufte :as tufte]
             [tick.core :as t]))
+
+(defn- sample-pstats [id]
+  (second (tufte/profiled {} (tufte/p (keyword id) :ok))))
 
 (deftest module-test
   (testing "module returns expected keys"
     (let [m (admin/module {:biff.admin/get-user-events (fn [_] [])})]
       (is (contains? m :biff.core/init))
+      (is (contains? m :biff.background/tasks))
       (is (contains? m :biff.ring/routes))
       (is (= [admin/wrap-profiling] (:biff.ring/base-middleware m)))
       (is (= [admin/wrap-resolver-profiling] (:biff.graph/middleware m)))
@@ -56,9 +62,52 @@
     (let [resolver {:id :test/resolver
                     :resolve (fn [_ctx input] {:result (:value input)})}
           wrapped (admin/wrap-resolver-profiling resolver)
-          ctx {:biff.admin/pstats (atom nil)}
-          result ((:resolve wrapped) ctx {:value 42})]
+           ctx {:biff.admin/pstats (atom nil)}
+           result ((:resolve wrapped) ctx {:value 42})]
       (is (= {:result 42} result)))))
+
+(deftest flush-pstats-test
+  (testing "flush-pstats! merges in-memory stats into the current kv day and clears memory"
+    (let [stored (atom {"2026-04-27" (sample-pstats "existing")})
+          pstats-atom (atom (sample-pstats "current"))
+          ctx {:biff.admin/pstats pstats-atom
+               :biff.kv/get-value (fn [_ _ key] (get @stored key))
+               :biff.kv/set-value (fn [_ _ key value] (swap! stored assoc key value))}]
+      (with-redefs [t/now (constantly (t/instant "2026-04-27T10:30:00Z"))]
+        (#'admin/flush-pstats! ctx))
+      (is (nil? @pstats-atom))
+      (let [formatted (str (tufte/format-pstats (get @stored "2026-04-27")))]
+        (is (str/includes? formatted ":existing"))
+        (is (str/includes? formatted ":current"))))))
+
+(deftest recent-pstats-data-test
+  (testing "recent-pstats-data merges only the last seven persisted days plus current in-memory stats"
+    (let [stored (into {}
+                       [["2026-04-21" (sample-pstats "too-old")]
+                        ["2026-04-22" (sample-pstats "day-1")]
+                        ["2026-04-23" (sample-pstats "day-2")]
+                        ["2026-04-24" (sample-pstats "day-3")]
+                        ["2026-04-25" (sample-pstats "day-4")]
+                        ["2026-04-26" (sample-pstats "day-5")]
+                        ["2026-04-27" (sample-pstats "day-6")]
+                        ["2026-04-28" (sample-pstats "day-7")]])
+          ctx {:biff.admin/pstats (atom (sample-pstats "current-hour"))
+               :biff.kv/get-value (fn [_ _ key] (get stored key))}]
+      (with-redefs [t/now (constantly (t/instant "2026-04-28T12:00:00Z"))]
+        (let [formatted (str (tufte/format-pstats (#'admin/recent-pstats-data ctx)))]
+          (is (str/includes? formatted ":day-1"))
+          (is (str/includes? formatted ":day-7"))
+          (is (str/includes? formatted ":current-hour"))
+          (is (not (str/includes? formatted ":too-old"))))))))
+
+(deftest hourly-schedule-test
+  (testing "hourly-schedule starts at the next UTC hour"
+    (let [schedule (#'admin/hourly-schedule-from
+                    (java.time.ZonedDateTime/parse "2026-04-28T10:15:00Z"))]
+      (is (= "2026-04-28T11:00Z"
+             (str (first schedule))))
+      (is (= "2026-04-28T12:00Z"
+             (str (second schedule)))))))
 
 (deftest default-get-route-id-test
   (testing "returns nil when no route match"
