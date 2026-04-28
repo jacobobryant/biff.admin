@@ -11,14 +11,16 @@
    - Middleware for HTTP handler profiling
    - Helper for wrapping biff.graph resolvers with profiling"
   (:require [com.biffweb.admin.impl.ui :as ui]
-            [clojure.edn :as edn]
-            [clojure.string :as str]
-            [taoensso.tufte :as tufte]
-            [taoensso.telemere :as tel]
-            [taoensso.telemere.tools-logging :as tel.tl]
-            [tick.core :as t])
+             [clojure.edn :as edn]
+             [clojure.string :as str]
+             [taoensso.tufte :as tufte]
+             [taoensso.telemere :as tel]
+             [taoensso.telemere.tools-logging :as tel.tl]
+             [tick.core :as t])
   (:import [java.security SecureRandom]
-           [java.io File]))
+           [java.io File]
+           [java.time ZoneOffset ZonedDateTime]
+           [java.time.temporal ChronoUnit]))
 
 ;; ============================================================
 ;; Profiling helpers
@@ -39,6 +41,46 @@
                             pstats-data))))
         result)
       (f))))
+
+(def ^:private pstats-kv-namespace :biff.admin/pstats)
+
+(defn- merge-pstats-data [existing new-data]
+  (cond
+    (and existing new-data) (tufte/merge-pstats existing new-data)
+    existing existing
+    :else new-data))
+
+(defn- pstats-day-key [now]
+  (str (t/date (t/in now (t/zone "UTC")))))
+
+(defn- flush-pstats! [{:keys [biff.admin/pstats biff.kv/get-value biff.kv/set-value] :as ctx}]
+  (when (and pstats get-value set-value)
+    (let [[pstats-data _] (swap-vals! pstats (constantly nil))]
+      (when pstats-data
+        (let [day-key (pstats-day-key (t/now))
+              existing (get-value ctx pstats-kv-namespace day-key)
+              merged (merge-pstats-data existing pstats-data)]
+          (set-value ctx pstats-kv-namespace day-key merged))))))
+
+(defn- hourly-schedule-from [now]
+  (let [start (-> now
+                  (.truncatedTo ChronoUnit/HOURS)
+                  (.plusHours 1))]
+    (iterate #(.plusHours ^ZonedDateTime % 1) start)))
+
+(defn- hourly-schedule []
+  (hourly-schedule-from (ZonedDateTime/now ZoneOffset/UTC)))
+
+(defn- recent-pstats-data [{:keys [biff.admin/pstats biff.kv/get-value] :as ctx}]
+  (let [today (t/date (t/in (t/now) (t/zone "UTC")))
+        start-day (t/<< today (t/new-period 6 :days))
+        persisted (when get-value
+                    (reduce (fn [merged day]
+                              (merge-pstats-data merged
+                                                 (get-value ctx pstats-kv-namespace (str day))))
+                            nil
+                            (take 7 (iterate #(t/>> % (t/new-period 1 :days)) start-day))))]
+    (merge-pstats-data persisted (when pstats @pstats))))
 
 (defn default-get-route-id
   "Default route ID extraction. Returns e.g. \"POST /stuff/:id\"."
@@ -364,11 +406,11 @@
         user-events (when get-user-events (get-user-events ctx))
         revenue-events (when get-revenue-events (get-revenue-events ctx))
         users (when get-users (get-users ctx))
-        dau (compute-dau (or user-events []) tz now)
-        wau (compute-wau (or user-events []) tz now)
-        daily-signups (when users (compute-daily-signups users tz now))
-        daily-revenue (when revenue-events (compute-daily-revenue revenue-events tz now))
-        pstats-data (when pstats @pstats)
+       dau (compute-dau (or user-events []) tz now)
+       wau (compute-wau (or user-events []) tz now)
+       daily-signups (when users (compute-daily-signups users tz now))
+       daily-revenue (when revenue-events (compute-daily-revenue revenue-events tz now))
+        pstats-data (recent-pstats-data ctx)
         pstats-formatted (some-> pstats-data tufte/format-pstats)
         recent-days (->> (keys dau) (take-last 30))
         resource-usage (get-resource-usage)
@@ -498,6 +540,8 @@
   {:biff.core/init (fn [_modules-var]
                      {:biff.admin/pstats (atom nil)
                       :biff.admin/signin-codes (atom {})})
+   :biff.background/tasks [{:schedule hourly-schedule
+                            :task flush-pstats!}]
    :biff.ring/routes ["/_biff/admin" {:middleware [[wrap-admin-params params]]}
                        ["/health" {:get health-handler
                                    :name ::health}]
